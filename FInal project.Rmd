@@ -1,0 +1,700 @@
+---
+title: "Final Project"
+author: "Jiwon Lee"
+date: "2023-11-09"
+output: word_document
+---
+
+## libaray
+```{r library, message=F, warning=F}
+library(ggplot2)  
+library(MASS)
+library(gridExtra)
+library(dplyr)
+library(mclust)
+library(mulgar)
+library(colorspace)
+library(ggcorrplot)
+library(GGally)
+library(tourr)
+library(reshape2)
+library(patchwork)
+library(gt)
+library(geozoo)
+library(classifly)
+library(e1071)
+library(randomForest)
+library(rsample)
+library(caret)
+library(pdp)
+library(vip)
+```
+
+```{r data, message=F, warning=F}
+df <- read.csv('Frogs_MFCCs.csv', stringsAsFactors = T)
+df <- df[-26] # RecordID는 분석에서 제외
+df_n <- df %>% dplyr::select(MFCCs_.1:MFCCs_22) # 연속형 변수들로만 이루어진 df
+dim(df)
+head(df)
+summary(df)
+```
+
+## 1. EDA
+### 1.1. 범주형 변수 살펴보기
+```{r message=F, warning=F}
+# 범주형 변수 살펴보기
+table(df$Family)
+table(df$Genus)
+table(df$Species)
+```
+
+```{r message=F, warning=F, fig.width=7, fig.height=5}
+# bar graph
+g1 <- ggplot(df, aes(Family))+geom_bar()+theme_minimal()+theme(axis.text.x=element_text(angle=45, hjust=1))
+g2 <- ggplot(df, aes(Genus))+geom_bar()+theme_minimal()+theme(axis.text.x=element_text(angle=45, hjust=1))
+g3 <- ggplot(df, aes(Species))+geom_bar()+theme_minimal()+theme(axis.text.x=element_text(angle=45, hjust=1))
+grid.arrange(g1, g2, g3, nrow=2)
+```
+
+```{r message=F, warning=F, fig.width=7, fig.height=5}
+# bar graph
+ggplot(df, aes(Family, fill=Genus)) + 
+  geom_bar() + 
+  theme_minimal() + 
+  theme(axis.text=element_text(size=12), axis.title = element_text(size = 15))
+
+ggplot(df, aes(Family, fill=Species)) + 
+  geom_bar() + 
+  theme_minimal() +
+  theme(axis.text=element_text(size=12), axis.title = element_text(size = 15))
+
+ggplot(df, aes(Genus, fill=Species)) + 
+  geom_bar() + 
+  theme_minimal() + 
+  theme(axis.text.x=element_text(angle=45, hjust=1, size=10), axis.title = element_text(size = 15))
+```
+
+### 1.2. 연속형 변수 살펴보기
+```{r message=F, warning=F, fig.width=7, fig.height=5}
+ggscatmat(df_n[1:7]) +
+ theme_minimal() +
+ xlab("") + ylab("")
+
+ggscatmat(df_n[8:15]) +
+ theme_minimal() +
+ xlab("") + ylab("")
+
+ggscatmat(df_n[16:22]) +
+ theme_minimal() +
+ xlab("") + ylab("")
+```
+
+```{r message=F, warning=F, fig.width=7, fig.height=5}
+for(j in 1:2){
+  par(mfrow=c(3, 3),mar = c(5, 5, 2, 2))
+  for(i in 1:9){
+    hist(df[,9*(j-1)+i], freq=F, breaks=20,main=NULL, xlab=colnames(df)[9*(j-1)+i])
+    lines(density(df[,9*(j-1)+i]), col='red', lwd=2, lty=2)
+  }
+}
+par(mfrow=c(3, 3),mar = c(5, 5, 2, 2))
+for(i in 1:4){
+    hist(df[,18+i], freq=F, breaks=20,main=NULL, xlab=colnames(df)[18+i])
+    lines(density(df[,18+i]), col='red', lwd=2, lty=2)
+}
+```
+
+### 1.3. 연속형 + 범주형 같이 살펴보기
+```{r message=F, warning=F}
+ggplot(df, aes(Family, MFCCs_.3)) + 
+  geom_boxplot() + 
+  theme_minimal()+ 
+  theme(axis.text=element_text(size=12), axis.title = element_text(size = 15))
+```
+
+```{r message=F, warning=F}
+ggplot(df, aes(Genus, MFCCs_.3)) + 
+  geom_boxplot() + 
+  theme_minimal() + 
+  theme(axis.text.x=element_text(angle=30, hjust=1))+ 
+  theme(axis.text=element_text(size=12), axis.title = element_text(size = 15))
+```
+
+```{r message=F, warning=F}
+ggplot(df, aes(Species, MFCCs_.3)) + 
+  geom_boxplot() + 
+  theme_minimal() + 
+  theme(axis.text.x=element_text(angle=30, hjust=1))+ 
+  theme(axis.text=element_text(size=11), axis.title = element_text(size = 15))
+```
+
+```{r message=F, warning=F}
+ggplot(df, aes(MFCCs_.3, MFCCs_.4))+
+  geom_point(aes(colour=Family)) + 
+  facet_grid(Family ~.)
+```
+
+## 2. Preprocessing
+### species 문자열 수정
+```{r message=F, warning=F}
+# species 이름이 너무 길어 원활한 시각화를 위해 수정
+df$Species <- factor(substr(df$Species, 1, 11))
+```
+
+### 2.1. 결측치 확인
+```{r message=F, warning=F}
+colSums(is.na(df))
+```
+
+### 2.2. 상관성 확인
+```{r message=F, warning=F}
+data<-cor(df_n)
+data1<-melt(data)
+ggplot(data1,aes(x=Var1,y=Var2,fill=value))+
+  geom_tile()+
+  scale_fill_gradient2(midpoint=0,
+                      low = "darkorange",
+                    high = "darkgreen",
+                    mid='white',
+                    guide = "colorbar")+
+  theme(axis.title=element_blank(),axis.text.x=element_text(angle=45, hjust=1), aspect.ratio = 1)
+```
+
+- 3, 5 : -0.756
+- 7, 9 : -0.813
+- 9, 11 : -0.853
+- 10, 12 : -0.751
+- 11, 13 : -0.866
+- 11, 15 : 0.719
+- 12, 14 : -0.8435
+- 13, 15 : -0.905
+- 13, 17 : 0.784
+- 14, 16 : -0.784
+- 15, 17 : -0.883
+- 15, 22 : -0.710
+- 17, 22 : 0.745
+- 20, 22 : -0.808
+
+```{r message=F, warning=F}
+# corr > 0.7 제거
+# 5, 9, 10, 13, 14, 15, 22 제거
+df.cor <- df[-c(5, 9, 10, 13, 14, 15, 22)]
+data<-cor(df_n[-c(5, 9, 10, 13, 14, 15, 22)])
+data1<-melt(data)
+ggplot(data1,aes(x=Var1,y=Var2,fill=value))+
+  geom_tile()+
+  scale_fill_gradient2(midpoint=0,
+                      low = "darkorange",
+                    high = "darkgreen",
+                    mid='white',
+                    guide = "colorbar")+
+  theme(axis.title=element_blank(),axis.text.x=element_text(angle=45, hjust=1), aspect.ratio = 1)
+```
+
+### 2.3. 이상치 제거
+```{r message=F, warning=F}
+remove_outliers <- function(data, threshold = 1.5) {
+  outliers <- numeric()
+  for (col in colnames(df)[-c((ncol(df)-2):ncol(df))]) {
+    Q1 <- quantile(data[[col]], 0.25)
+    Q3 <- quantile(data[[col]], 0.75)
+    IQR <- Q3 - Q1
+    lower_bound <- Q1 - threshold * IQR
+    upper_bound <- Q3 + threshold * IQR
+    outliers <- c(outliers, which(data[[col]] < lower_bound | data[[col]] > upper_bound))
+  }
+  outliers <- unique(outliers)
+  return(data[-outliers, ])
+}
+
+# raw data w/o outliers
+df_no_out <- remove_outliers(df)
+df_no_out <- df_no_out %>% dplyr::select(-MFCCs_.1)
+
+
+# data w/o corr, outliers
+df.cor_no_out <- remove_outliers(df.cor)
+df.cor_no_out <- df.cor_no_out %>% dplyr::select(-MFCCs_.1)
+
+dim(df_no_out);dim(df.cor_no_out)
+```
+
+### 2.4. 표준화
+```{r message=F, warning=F}
+df_no_out_std = as.data.frame(scale(df_no_out[-c(22:24)]))
+df_no_out_std = cbind(df_no_out_std, df_no_out[c(22:24)])
+
+df.cor_no_out_std = as.data.frame(scale(df.cor_no_out[-c(15:17)]))
+df.cor_no_out_std = cbind(df.cor_no_out_std, df.cor_no_out[c(15:17)])
+
+dim(df_no_out_std);dim(df.cor_no_out_std)
+```
+
+## 3. PCA
+```{r message=F, warning=F}
+df_no_out_std_n <- df_no_out_std %>% dplyr::select(MFCCs_.2:MFCCs_22) # 연속형 변수만
+```
+
+```{r message=F, warning=F}
+pn_pca <- prcomp(df_no_out_std_n)
+ggscree(pn_pca, q = 9) + theme_minimal()
+```
+
+```{r message=F, warning=F}
+pn_pca$rotation[,1:4] %>%
+  as_tibble(rownames="Variable") %>% 
+  gt() %>%
+  fmt_number(columns = c(PC1, PC2, PC3, PC4),
+             decimals = 2)
+```
+
+```{r message=F, warning=F, fig.width=10, fig.height=5}
+df_pca <- princomp(df_no_out_std_n, cor=FALSE)
+par(mfrow=c(1, 2))
+screeplot(df_pca, type="lines")
+plot(df_pca, xlab = "Principal Component", main = "Variance by Prin.Comp.")
+```
+
+```{r message=F, warning=F}
+summary(df_pca)
+```
+
+- Comp.8까지 약 91% 분산 설명력
+- Comp.11까지 약 96% 분산 설명력
+
+```{r message=F, warning=F, eval=F, echo=F}
+animate(df_pca$scores[,1:4],
+        tour_path = grand_tour(),
+        display=display_xy(col = df_no_out_std$Species))
+
+render_gif(df_pca$scores[,1:4],
+ grand_tour(),
+ display_xy(col = df_no_out_std$Species, palette="Viridis"),
+ gif_file="C:/Users/jiddo/OneDrive/바탕 화면/대학원/23-2/세미나/기말 플젝/gifs/pca4.gif",
+ frames=500)
+```
+
+## 4. Classification
+```{r message=F, warning=F, eval=F, echo=F}
+images = c(
+  "C:/Users/jiddo/OneDrive/바탕 화면/대학원/23-2/세미나/기말 플젝/gifs/corr_votes.gif",
+    "C:/Users/jiddo/OneDrive/바탕 화면/대학원/23-2/세미나/기말 플젝/gifs/corr_train_svm_svs.gif",
+  "C:/Users/jiddo/OneDrive/바탕 화면/대학원/23-2/세미나/기말 플젝/gifs/rfimp_gmm.gif",
+  "C:/Users/jiddo/Ove/바탕 화면/대학원/23-2/세미나/기말 플젝/gifs/rfimp_h.gif",
+  "C:/Users/jiddo/OneDrive/바탕 화면/대학원/23-2/세미나/기말 플젝/gifs/rfimp_km.gif",
+  "C:/Users/jiddo/OneDrive/바탕 화면/대학원/23-2/세미나/기말 플젝/gifs/rfimp_species.gif"
+)
+```
+
+```{r message=F, warning=F}
+raw_cl <- df %>% dplyr::select(-c('Family', 'Genus'))
+scale_cl <- df_no_out_std %>% dplyr::select(-c('Family', 'Genus'))
+corr_cl <- df.cor_no_out_std %>% dplyr::select(-c('Family', 'Genus'))
+pca_cl <- as.data.frame(df_pca$scores[,1:8])
+pca_cl$Species <- df_no_out_std$Species
+pca_cl.4 <- as.data.frame(df_pca$scores[,1:4])
+pca_cl.4$Species <- df_no_out_std$Species
+
+set.seed(314)
+split <- initial_split(raw_cl, prop = 0.7, strata = "Species")
+raw_train <- training(split)
+raw_test <- testing(split)
+
+set.seed(314)
+split <- initial_split(scale_cl, prop = 0.7, strata = "Species")
+scale_train <- training(split)
+scale_test <- testing(split)
+
+set.seed(314)
+split <- initial_split(corr_cl, prop = 0.7, strata = "Species")
+corr_train <- training(split)
+corr_test <- testing(split)
+
+set.seed(314)
+split <- initial_split(pca_cl, prop = 0.7, strata = "Species")
+pca_train <- training(split)
+pca_test <- testing(split)
+
+set.seed(314)
+split <- initial_split(pca_cl.4, prop = 0.7, strata = "Species")
+pca4_train <- training(split)
+pca4_test <- testing(split)
+```
+
+```{r message=F, warning=F}
+# Macro F1-Score 계산 함수 정의
+macro_f1_score <- function(conf_matrix) {
+  macro_f1 <- mean(conf_matrix$byClass[ , 'F1'], na.rm=T)
+  return(macro_f1)
+}
+```
+
+```{r message=F, warning=F}
+model_fit <- function(model, train, test){
+  start_time <- proc.time()
+  if(model=='randomForest'){
+    set.seed(314)
+    fit <- randomForest(Species~., data=train, importance=T)
+    pred <- predict(fit, test)
+  }
+  else if(model=='LDA'){
+    fit <- lda(Species~., data=train)
+    pred <- predict(fit, test)$class
+  }
+  else if(model=='SVM'){
+    fit <- svm(Species~., data=train, probability=T, kernel='radial', scale=F)
+    pred <- predict(fit, test)
+  }
+  cm <- confusionMatrix(pred, test$Species)
+  acc <- cm$overall['Accuracy']
+  f1 <- macro_f1_score(cm)
+  
+  end_time <- proc.time()
+  execution_time <- end_time - start_time
+  
+  return(list(model = fit, cm = cm, acc=acc, f1=f1, time=execution_time[1]))
+}
+```
+
+### 4.1. randomForest
+```{r message=F, warning=F}
+# 원본
+raw_rf <- model_fit('randomForest', raw_train, raw_test)
+
+# 스케일링
+scale_rf <- model_fit('randomForest', scale_train, scale_test)
+
+# Corr
+corr_rf <- model_fit('randomForest', corr_train, corr_test)
+
+# pca
+pca_rf <- model_fit('randomForest', pca_train, pca_test)
+
+# pca4
+pca4_rf <- model_fit('randomForest', pca4_train, pca4_test)
+
+cbind(raw_rf, scale_rf, corr_rf, pca_rf, pca4_rf)
+```
+
+```{r eval=F, echo=F}
+pca4_rf_votes <- pca4_rf$model$votes %>%
+ as_tibble() %>%
+ dplyr::mutate(Species = pca4_train$Species)
+proj <- t(geozoo::f_helmert(10)[-1,])
+pca4_rf_v_p <- as.matrix(pca4_rf_votes[,1:10]) %*% proj
+colnames(pca4_rf_v_p) <- c("x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9")
+pca4_rf_v_p <- pca4_rf_v_p %>%
+ as.data.frame() %>%
+ mutate(Species = pca4_train$Species)
+simp <- geozoo::simplex(p=9)
+sp <- data.frame(simp$points)
+colnames(sp) <- c("x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9")
+sp$Species = ""
+pca4_rf_v_p_s <- bind_rows(sp, pca4_rf_v_p) %>%
+ mutate(Species = factor(Species))
+labels <- c("0" , "1", "2", "3", "4", "5", "6", "7", "8", "9",
+ rep("", 3791)) # 10개 sp(꼭짓점)에 라벨 표시시, 3791개 데이터에는 라벨 no
+
+render_gif(pca4_rf_v_p_s[,1:9],
+ grand_tour(),
+ display_xy(col = pca4_rf_v_p_s$Species,
+ axes = "off",
+ edges = as.matrix(simp$edges),
+ obs_labels = labels, palette="Viridis"),
+ gif_file="C:/Users/jiddo/OneDrive/바탕 화면/대학원/23-2/세미나/기말 플젝/gifs/pca4_votes.gif",
+ frames=500)
+```
+
+```{r}
+pca4_rf$model$importance %>%
+ as_tibble(rownames="Variable") %>%
+ rename(Accuracy=MeanDecreaseAccuracy,
+ Gini=MeanDecreaseGini) %>%
+ arrange(desc(Gini)) %>%
+ gt() %>%
+ fmt_number(columns = c(unique(df$Species), Accuracy),
+ decimals = 2) %>%
+ fmt_number(columns = Gini,
+ decimals = 0)
+```
+
+```{r}
+pca_rf$model$importance %>%
+ as_tibble(rownames="Variable") %>%
+ rename(Accuracy=MeanDecreaseAccuracy,
+ Gini=MeanDecreaseGini) %>%
+ arrange(desc(Gini)) %>%
+ gt() %>%
+ fmt_number(columns = c(unique(df$Species), Accuracy),
+ decimals = 2) %>%
+ fmt_number(columns = Gini,
+ decimals = 0)
+```
+
+```{r}
+corr_rf$model$importance %>%
+ as_tibble(rownames="Variable") %>%
+ rename(Accuracy=MeanDecreaseAccuracy,
+ Gini=MeanDecreaseGini) %>%
+ arrange(desc(Gini)) %>%
+ gt() %>%
+ fmt_number(columns = c(unique(df$Species), Accuracy),
+ decimals = 2) %>%
+ fmt_number(columns = Gini,
+ decimals = 0)
+```
+
+### 4.2. LDA
+```{r}
+# 원본
+raw_lda <- model_fit('LDA', raw_train, raw_test)
+
+# 스케일링
+scale_lda <- model_fit('LDA', scale_train, scale_test)
+
+# corr
+corr_lda <- model_fit('LDA', corr_train, corr_test)
+
+# pca
+pca_lda <- model_fit('LDA', pca_train, pca_test)
+
+# pca4
+pca4_lda <- model_fit('LDA', pca4_train, pca4_test)
+
+cbind(raw_lda, scale_lda, corr_lda, pca_lda, pca4_lda)
+```
+
+```{r}
+corr.pred <- predict(corr_lda$model, corr_test)
+corr.pred <- data.frame(corr.pred$x)
+corr.pred$species <- corr_test$Species
+ggplot(corr.pred, 
+                 aes(x=LD1, y=LD2, 
+                     colour=species)) + 
+  geom_point() +
+  scale_color_discrete_divergingx("Zissou 1") +
+  theme_minimal() +
+  theme(aspect.ratio = 1, legend.title = element_blank()) 
+```
+
+```{r}
+pca4.pred <- predict(pca4_lda$model, pca4_test)
+pca4.pred <- data.frame(pca4.pred$x)
+pca4.pred$species <- pca4_test$Species
+ggplot(pca4.pred,aes(x=LD1, y=LD2, colour=species)) + 
+  geom_point() +
+  scale_color_discrete_divergingx("Zissou 1") +
+  theme_minimal() +
+  theme(aspect.ratio = 1, legend.title = element_blank()) 
+```
+
+### 4.3. SVM
+```{r}
+# 원본
+raw_svm <- model_fit('SVM', raw_train, raw_test)
+
+# 스케일링
+scale_svm <- model_fit('SVM', scale_train, scale_test)
+
+# Corr
+corr_svm <- model_fit('SVM', corr_train, corr_test)
+
+# pca
+pca_svm <- model_fit('SVM', pca_train, pca_test)
+
+# pca4
+pca4_svm <- model_fit('SVM', pca4_train, pca4_test)
+
+cbind(raw_svm, scale_svm, corr_svm, pca_svm, pca4_svm)
+```
+
+```{r eval=F, echo=F}
+c_pch <- rep(20, nrow(pca4_train))
+c_pch[pca4_svm$model$index[abs(pca4_svm$model$coefs)<1]] <- 4
+c_cex <- rep(1, nrow(pca4_train))
+c_cex[pca4_svm$model$index[abs(pca4_svm$model$coefs)<1]] <- 2
+render_gif(pca4_train[,1:4],
+ grand_tour(),
+ display_xy(col=pca4_train$Species, pch=c_pch, cex=c_cex),
+ gif_file="C:/Users/jiddo/OneDrive/바탕 화면/대학원/23-2/세미나/기말 플젝/gifs/pca4_train_svm_svs.gif",
+ frames=500)
+```
+
+```{r}
+svm_model <- train(
+  x = corr_train[,-15],              # 독립 변수
+  y = corr_train$Species,            # 종속 변수
+  method = "svmLinear",        # 선형 SVM
+  trControl = trainControl(method = "cv")
+)
+
+# 변수 중요도 확인
+sort(rowMeans(varImp(svm_model)$importance), decreasing=T)
+```
+
+```{r eval=F, echo=F}
+pca4_svm_e <- explore(pca4_svm$model, pca4_train)
+set.seed(1022)
+prj1 <- mulgar::norm_vec(t(pca4_svm$model$SV) %*%
+ pca4_svm$model$coefs)
+prj2 <- basis_random(4, 1) # add orthogonal random vector to make 2D projection
+prj <- orthonormalise(cbind(prj1, prj2))
+
+symbols <- c(3, 20)
+c_pch <- symbols[as.numeric(pca4_svm_e$.TYPE[!pca4_svm_e$.BOUNDARY])]
+```
+
+```{r message=F, warning=F}
+mulgar::norm_vec(t(pca4_svm$model$SV) %*%
+ pca4_svm$model$coefs)
+```
+
+```{r eval=F, echo=F}
+corr_svm_e <- explore(corr_svm$model, corr_train)
+set.seed(1022)
+prj1 <- mulgar::norm_vec(t(corr_svm$model$SV) %*%
+ corr_svm$model$coefs)
+prj2 <- basis_random(14, 1) # add orthogonal random vector to make 2D projection
+prj <- orthonormalise(cbind(prj1, prj2))
+
+symbols <- c(3, 20)
+c_pch <- symbols[as.numeric(corr_svm_e$.TYPE[!corr_svm_e$.BOUNDARY])]
+```
+
+```{r message=F, warning=F}
+mulgar::norm_vec(t(corr_svm$model$SV) %*%
+ corr_svm$model$coefs)
+```
+
+### 4.4. 결과 해석
+```{r message=F, warning=F}
+imp <- importance(corr_rf$model)
+impvar <- rownames(imp)[order(imp[, 1], decreasing=TRUE)]
+op <- par(mfrow=c(2, 3), cex.main=1.5, cex.lab=1.5)
+for (i in 1:6) {
+    partialPlot(corr_rf$model, corr_train, impvar[i], xlab=impvar[i], main=paste(impvar[i]), xlim=c(-1, 1))
+}
+par(op)
+```
+
+## 5. Clustering
+### 5.1. 데이터셋 BIC 비교
+```{r message=F, warning=F, eval=F}
+scale_clt <- scale_cl %>% dplyr::select(-c('Species'))
+corr_clt <- corr_cl %>% dplyr::select(-c('Species'))
+pca_clt <- pca_cl %>% dplyr::select(-c('Species'))
+pca4_clt <- pca_cl.4 %>% dplyr::select(-c('Species'))
+rf_imp <- corr_cl[,c(3, 5, 7, 8, 10, 12)]
+
+scale_mc <- Mclust(scale_clt, G=10, verbose = FALSE)
+corr_mc <- Mclust(corr_clt, G=10, verbose = FALSE)
+pca_mc <- Mclust(pca_clt, G=10, verbose = FALSE)
+pca4_mc <- Mclust(pca4_clt, G=10, verbose = FALSE)
+rfimp_mc <- Mclust(rf_imp, G=10, verbose = FALSE)
+
+c(scale_mc$bic, corr_mc$bic, pca_mc$bic, pca4_mc$bic, rfimp_mc$bic)
+```
+
+```{r message=F, warning=F, eval=F}
+scale_clt <- scale_cl %>% dplyr::select(-c('Species'))
+corr_clt <- corr_cl %>% dplyr::select(-c('Species'))
+pca_clt <- pca_cl %>% dplyr::select(-c('Species'))
+pca4_clt <- pca_cl.4 %>% dplyr::select(-c('Species'))
+rf_imp <- corr_cl[,c(3, 5, 7, 8, 10, 12)]
+
+scale_mc <- Mclust(scale_clt, G=4, verbose = FALSE)
+corr_mc <- Mclust(corr_clt, G=4, verbose = FALSE)
+pca_mc <- Mclust(pca_clt, G=4, verbose = FALSE)
+pca4_mc <- Mclust(pca4_clt, G=4, verbose = FALSE)
+rfimp_mc <- Mclust(rf_imp, G=4, verbose = FALSE)
+
+c(scale_mc$bic, corr_mc$bic, pca_mc$bic, pca4_mc$bic, rfimp_mc$bic)
+```
+
+```{r message=F, warning=F, eval=F}
+scale_clt <- scale_cl %>% dplyr::select(-c('Species'))
+corr_clt <- corr_cl %>% dplyr::select(-c('Species'))
+pca_clt <- pca_cl %>% dplyr::select(-c('Species'))
+pca4_clt <- pca_cl.4 %>% dplyr::select(-c('Species'))
+rf_imp <- corr_cl[,c(3, 5, 7, 8, 10, 12)]
+
+scale_mc <- Mclust(scale_clt, G=8, verbose = FALSE)
+corr_mc <- Mclust(corr_clt, G=8, verbose = FALSE)
+pca_mc <- Mclust(pca_clt, G=8, verbose = FALSE)
+pca4_mc <- Mclust(pca4_clt, G=8, verbose = FALSE)
+rfimp_mc <- Mclust(rf_imp, G=8, verbose = FALSE)
+
+c(scale_mc$bic, corr_mc$bic, pca_mc$bic, pca4_mc$bic, rfimp_mc$bic)
+```
+
+- randomforest importance 상위 6개 변수로 이루어진 데이터프레임의 BIC가 가장 최소
+
+### 5.2. Clustering of Species
+```{r message=F, warning=F}
+rf_imp <- corr_cl[,c(3, 5, 7, 8, 10, 12)]
+rfimp_mc <- Mclust(rf_imp, G=10, verbose = FALSE)
+
+df_km <- kmeans(rf_imp, centers=10, iter.max = 50, nstart = 20)
+
+df_dist <- dist(rf_imp)
+df_hcw <- hclust(df_dist, method="ward.D2")
+
+rf_imp_clt <- rf_imp
+rf_imp_clt$mc <- factor(rfimp_mc$classification)
+rf_imp_clt$km <- factor(df_km$cluster)
+rf_imp_clt$h <- factor(cutree(df_hcw, 10))
+
+rf_imp_clt['Species'] <- corr_cl$Species
+
+table(rf_imp_clt$mc, rf_imp_clt$Species)
+table(rf_imp_clt$km, rf_imp_clt$Species)
+table(rf_imp_clt$h, rf_imp_clt$Species)
+```
+
+### 5.3. Clustering of Genus
+```{r message=F, warning=F}
+rf_imp <- corr_cl[,c(3, 5, 7, 8, 10, 12)]
+rfimp_mc <- Mclust(rf_imp, G=8, verbose = FALSE)
+
+df_km <- kmeans(rf_imp, centers=8, iter.max = 50, nstart = 20)
+
+df_dist <- dist(rf_imp)
+df_hcw <- hclust(df_dist, method="ward.D2")
+
+rf_imp_clt <- rf_imp
+rf_imp_clt$mc <- factor(rfimp_mc$classification)
+rf_imp_clt$km <- factor(df_km$cluster)
+rf_imp_clt$h <- factor(cutree(df_hcw, 8))
+
+rf_imp_clt['Genus'] <- df.cor_no_out_std$Genus
+
+table(rf_imp_clt$mc, rf_imp_clt$Genus)
+table(rf_imp_clt$km, rf_imp_clt$Genus)
+table(rf_imp_clt$h, rf_imp_clt$Genus)
+```
+
+### 5.4. Clustering of Family
+```{r message=F, warning=F}
+rf_imp <- corr_cl[,c(3, 5, 7, 8, 10, 12)]
+rfimp_mc <- Mclust(rf_imp, G=4, verbose = FALSE)
+
+df_km <- kmeans(rf_imp, centers=4, iter.max = 50, nstart = 20)
+
+df_dist <- dist(rf_imp)
+df_hcw <- hclust(df_dist, method="ward.D2")
+
+rf_imp_clt <- rf_imp
+rf_imp_clt$mc <- factor(rfimp_mc$classification)
+rf_imp_clt$km <- factor(df_km$cluster)
+rf_imp_clt$h <- factor(cutree(df_hcw, 4))
+
+rf_imp_clt['Family'] <- df.cor_no_out_std$Family
+
+table(rf_imp_clt$mc, rf_imp_clt$Family)
+table(rf_imp_clt$km, rf_imp_clt$Family)
+table(rf_imp_clt$h, rf_imp_clt$Family)
+```
+
+
+
+
